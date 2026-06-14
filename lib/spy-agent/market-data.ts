@@ -1,14 +1,24 @@
-// Intraday data layer. Tries a live provider (Yahoo Finance chart API — no key
-// required) and transparently falls back to a deterministic simulated session
-// when the network is unavailable (e.g. sandboxed runtime). The data `source`
-// is always surfaced to the caller so the UI can label it.
+// Intraday data layer. Pulls from the provider chain (TradingView webhook →
+// real-time provider keys → delayed Yahoo) and classifies how fresh the feed
+// actually is, so delayed data is never silently treated as live. Falls back to
+// a deterministic simulated session when nothing is reachable (sandboxed runtime).
 
+import { classifyFreshness, type Feed } from "./feed.ts"
+import { providerChain } from "./providers.ts"
 import type { Candle, DataSource, Instrument } from "./types.ts"
 
 export interface IntradayData {
   symbol: string
   candles: Candle[]
   source: DataSource
+  /** Honest freshness label: real-time | delayed | closed | simulated. */
+  feed: Feed
+  /** Name of the data provider that served this scan. */
+  provider: string
+  /** Age of the freshest print, in seconds (Infinity when simulated). */
+  latencySeconds: number
+  /** ISO timestamp of the freshest data point. */
+  asOf: string
 }
 
 /** Prior-session reference levels that day traders pivot around. */
@@ -32,39 +42,6 @@ interface YahooResult {
   meta?: { regularMarketPrice?: number }
   timestamp?: number[]
   indicators?: { quote?: Array<{ open?: (number | null)[]; high?: (number | null)[]; low?: (number | null)[]; close?: (number | null)[]; volume?: (number | null)[] }> }
-}
-
-async function fetchYahoo(symbol: string, timeoutMs = 6000): Promise<Candle[]> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-    symbol,
-  )}?range=1d&interval=5m&includePrePost=false`
-  const controller = new AbortController()
-  const t = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (spy-0dte-agent)" },
-    })
-    if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`)
-    const json = (await res.json()) as { chart?: { result?: YahooResult[]; error?: unknown } }
-    const result = json?.chart?.result?.[0]
-    const ts = result?.timestamp
-    const q = result?.indicators?.quote?.[0]
-    if (!ts || !q) throw new Error("Yahoo: empty payload")
-    const candles: Candle[] = []
-    for (let i = 0; i < ts.length; i++) {
-      const o = q.open?.[i]
-      const h = q.high?.[i]
-      const l = q.low?.[i]
-      const c = q.close?.[i]
-      if (o == null || h == null || l == null || c == null) continue
-      candles.push({ time: ts[i] * 1000, open: o, high: h, low: l, close: c, volume: q.volume?.[i] ?? 0 })
-    }
-    if (candles.length < 5) throw new Error("Yahoo: too few candles")
-    return candles
-  } finally {
-    clearTimeout(t)
-  }
 }
 
 /** Mulberry32 — tiny deterministic PRNG so a given seed always replays. */
@@ -145,15 +122,37 @@ const FALLBACK_BASE: Record<string, number> = {
   "^GSPC": 5450,
 }
 
-export async function getIntraday(instrument: Instrument): Promise<IntradayData> {
+export async function getIntraday(instrument: Instrument, now = new Date()): Promise<IntradayData> {
   const symbol = underlyingSymbol(instrument)
-  try {
-    const candles = await fetchYahoo(symbol)
-    return { symbol, candles, source: "live" }
-  } catch {
-    const base = FALLBACK_BASE[symbol] ?? 500
-    const candles = simulateSession(symbol, base, daySeed(symbol))
-    return { symbol, candles, source: "simulated" }
+  for (const { fn } of providerChain()) {
+    try {
+      const res = await fn(instrument)
+      const fresh = classifyFreshness(res.asOf, false, now)
+      return {
+        symbol,
+        candles: res.candles,
+        source: "live",
+        feed: fresh.feed,
+        provider: res.provider,
+        latencySeconds: fresh.latencySeconds,
+        asOf: fresh.asOf,
+      }
+    } catch {
+      // Try the next provider in the chain.
+    }
+  }
+  // Nothing reachable — deterministic simulated session.
+  const base = FALLBACK_BASE[symbol] ?? 500
+  const candles = simulateSession(symbol, base, daySeed(symbol))
+  const fresh = classifyFreshness(null, true, now)
+  return {
+    symbol,
+    candles,
+    source: "simulated",
+    feed: fresh.feed,
+    provider: "simulated",
+    latencySeconds: fresh.latencySeconds,
+    asOf: fresh.asOf,
   }
 }
 

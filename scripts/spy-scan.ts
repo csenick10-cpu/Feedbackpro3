@@ -30,8 +30,16 @@ if (asJson) {
 } else {
   const r = report
   const ind = r.indicators
+  const feedTag =
+    r.feed === "real-time"
+      ? `REAL-TIME via ${r.provider} (${r.latencySeconds}s)`
+      : r.feed === "delayed"
+        ? `DELAYED via ${r.provider} (~${Math.max(1, Math.round(r.latencySeconds / 60))}m)`
+        : r.feed === "closed"
+          ? `MARKET CLOSED (${r.provider})`
+          : "SIMULATED (no live feed)"
   console.log("")
-  console.log(`  ⚡ 0DTE AGENT — ${r.instrument} (${r.underlyingSymbol})   [data: ${r.source}]`)
+  console.log(`  ⚡ 0DTE AGENT — ${r.instrument} (${r.underlyingSymbol})   [${feedTag}]`)
   console.log(`  ${new Date(r.generatedAt).toLocaleString()}`)
   console.log("  " + "─".repeat(58))
   console.log(`  Price ${r.price.toFixed(2)}   VWAP ${ind.vwap.toFixed(2)}   ATR ${ind.atr14.toFixed(2)}`)

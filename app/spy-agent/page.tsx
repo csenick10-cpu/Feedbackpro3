@@ -124,13 +124,7 @@ export default function SpyAgentPage() {
                 >
                   {report.session.label}
                 </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 font-semibold ${
-                    report.source === "live" ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"
-                  }`}
-                >
-                  {report.source === "live" ? "LIVE DATA" : "SIMULATED"}
-                </span>
+                <FeedBadge report={report} />
                 {new Date(report.generatedAt).toLocaleTimeString()}
               </span>
             </div>
@@ -368,6 +362,39 @@ function PriceChart({ candles, vwap, dir }: { candles: Candle[]; vwap: number; d
         VWAP
       </text>
     </svg>
+  )
+}
+
+function FeedBadge({ report }: { report: AgentReport }) {
+  const f = report.feed
+  const style =
+    f === "real-time"
+      ? "bg-emerald-500/15 text-emerald-400"
+      : f === "delayed"
+        ? "bg-red-500/15 text-red-400"
+        : f === "closed"
+          ? "bg-zinc-500/20 text-zinc-400"
+          : "bg-amber-500/15 text-amber-400"
+  const text =
+    f === "real-time"
+      ? `REAL-TIME · ${report.provider} · ${report.latencySeconds}s`
+      : f === "delayed"
+        ? `DELAYED · ${report.provider} · ~${Math.max(1, Math.round(report.latencySeconds / 60))}m`
+        : f === "closed"
+          ? `MARKET CLOSED · ${report.provider}`
+          : "SIMULATED"
+  const title =
+    f === "real-time"
+      ? "Latest print is fresh enough to trade live."
+      : f === "delayed"
+        ? "Feed is delayed — not safe for live 0DTE entries. Set a real-time provider key or push TradingView alerts."
+        : f === "simulated"
+          ? "No live feed reachable — synthetic session for demo/testing."
+          : "Regular session is closed; illustrative read only."
+  return (
+    <span className={`rounded-full px-2 py-0.5 font-semibold ${style}`} title={title}>
+      {text}
+    </span>
   )
 }
 

@@ -135,7 +135,7 @@ export async function runAgent(opts: RunOptions = {}): Promise<AgentReport> {
   const instrument: Instrument = opts.instrument ?? "SPY"
   const now = opts.now ?? new Date()
   const riskPerTrade = opts.riskPerTrade ?? DEFAULT_RISK_PER_TRADE
-  const { symbol, candles, source } = await getIntraday(instrument)
+  const { symbol, candles, source, feed, provider, latencySeconds, asOf } = await getIntraday(instrument, now)
 
   const ind = buildSnapshot(candles)
   const daily = await getDailyLevels(instrument, candles)
@@ -164,6 +164,10 @@ export async function runAgent(opts: RunOptions = {}): Promise<AgentReport> {
     underlyingSymbol: symbol,
     generatedAt: now.toISOString(),
     source,
+    feed,
+    provider,
+    latencySeconds,
+    asOf,
     price: ind.price,
     direction: bias.direction,
     confidence: bias.confidence,
@@ -178,5 +182,17 @@ export async function runAgent(opts: RunOptions = {}): Promise<AgentReport> {
     disclaimer: DISCLAIMER,
   }
   report.reasoning = buildReasoning(instrument, ind, session, keyLevels, report)
+
+  // Lead with an explicit data-quality line — never let delayed/simulated data
+  // be mistaken for a live read.
+  const dataLine =
+    feed === "real-time"
+      ? `Data: ${provider} · REAL-TIME (${latencySeconds}s old). Safe for live 0DTE decisions.`
+      : feed === "simulated"
+        ? `⚠ Data: SIMULATED — no live feed reachable. For LIVE data set a real-time provider key (POLYGON_API_KEY, ALPACA_API_KEY_ID/SECRET, or TRADIER_ACCESS_TOKEN) or push TradingView alerts to /api/spy-agent/tradingview.`
+        : feed === "closed"
+          ? `Data: ${provider} · market is closed (last print ${new Date(asOf).toLocaleTimeString()}). Illustrative read only.`
+          : `⚠ Data: ${provider} · DELAYED ~${Math.max(1, Math.round(latencySeconds / 60))}m — NOT safe for live 0DTE entries. Configure a real-time feed.`
+  report.reasoning.unshift(dataLine)
   return report
 }

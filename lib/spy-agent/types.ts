@@ -121,11 +121,21 @@ export interface SessionContext {
   note: string
 }
 
+export type Feed = "real-time" | "delayed" | "simulated" | "closed"
+
 export interface AgentReport {
   instrument: Instrument
   underlyingSymbol: string
   generatedAt: string
   source: DataSource
+  /** Honest data-freshness label so delayed data is never shown as live. */
+  feed: Feed
+  /** Provider that served the data (tradingview, polygon, alpaca, yahoo, …). */
+  provider: string
+  /** Age of the freshest print in seconds (Infinity when simulated). */
+  latencySeconds: number
+  /** ISO timestamp of the freshest data point. */
+  asOf: string
   price: number
   direction: Direction
   /** 0..100 conviction in the directional call (session-adjusted). */
