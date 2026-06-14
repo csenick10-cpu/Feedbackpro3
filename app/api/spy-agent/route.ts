@@ -10,9 +10,11 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const raw = (searchParams.get("instrument") ?? "SPY").toUpperCase()
   const instrument: Instrument = raw === "SPXW" || raw === "SPX" ? "SPXW" : "SPY"
+  const riskRaw = Number(searchParams.get("risk"))
+  const riskPerTrade = Number.isFinite(riskRaw) && riskRaw > 0 ? riskRaw : undefined
 
   try {
-    const report = await runAgent({ instrument, chartBars: 78 })
+    const report = await runAgent({ instrument, chartBars: 78, riskPerTrade })
     return NextResponse.json(report, {
       headers: { "Cache-Control": "no-store" },
     })

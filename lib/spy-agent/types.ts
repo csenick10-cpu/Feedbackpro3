@@ -64,6 +64,22 @@ export interface OptionMetrics {
   hoursToExpiry: number
 }
 
+/** Day-trade position sizing + premium-based exits for the contract. */
+export interface PositionSizing {
+  /** Dollar risk budget for this trade (1R). */
+  riskPerTrade: number
+  /** Suggested number of contracts given the per-contract stop loss. */
+  contracts: number
+  /** Estimated option premium if price reaches the underlying target. */
+  targetPremium: number
+  /** Estimated option premium if price hits the underlying stop. */
+  stopPremium: number
+  /** Estimated dollar loss at stop across all contracts. */
+  maxLoss: number
+  /** Estimated dollar profit at target across all contracts. */
+  profitAtTarget: number
+}
+
 export interface StrikeRecommendation {
   optionType: OptionType
   strike: number
@@ -77,6 +93,32 @@ export interface StrikeRecommendation {
   invalidation: number
   riskRewardRatio: number
   option: OptionMetrics
+  sizing: PositionSizing
+}
+
+/** Reference price levels day traders pivot around, plus nearest S/R. */
+export interface KeyLevels {
+  prevClose: number
+  prevHigh: number
+  prevLow: number
+  openingRangeHigh: number
+  openingRangeLow: number
+  sessionHigh: number
+  sessionLow: number
+  /** Closest level above the current price (resistance), if any. */
+  nearestResistance: { label: string; price: number } | null
+  /** Closest level below the current price (support), if any. */
+  nearestSupport: { label: string; price: number } | null
+}
+
+/** Time-of-day trading context (re-exported shape from session.ts). */
+export interface SessionContext {
+  phase: string
+  label: string
+  tradeable: boolean
+  multiplier: number
+  minutesIntoSession: number
+  note: string
 }
 
 export interface AgentReport {
@@ -86,10 +128,12 @@ export interface AgentReport {
   source: DataSource
   price: number
   direction: Direction
-  /** 0..100 conviction in the directional call. */
+  /** 0..100 conviction in the directional call (session-adjusted). */
   confidence: number
   /** Estimated 1-sigma move over the remaining session (underlying points). */
   expectedMove: number
+  session: SessionContext
+  keyLevels: KeyLevels
   indicators: IndicatorSnapshot
   signals: Signal[]
   recommendation: StrikeRecommendation | null

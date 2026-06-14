@@ -13,6 +13,8 @@ const args = process.argv.slice(2)
 const asJson = args.includes("--json")
 const sym = (args.find((a) => !a.startsWith("--")) ?? "SPY").toUpperCase()
 const instrument: Instrument = sym === "SPXW" || sym === "SPX" ? "SPXW" : "SPY"
+const riskArg = args.find((a) => a.startsWith("--risk="))
+const riskPerTrade = riskArg ? Number(riskArg.split("=")[1]) || undefined : undefined
 
 const bar = (pct: number, width = 24) => {
   const filled = Math.round((pct / 100) * width)
@@ -21,7 +23,7 @@ const bar = (pct: number, width = 24) => {
 
 const arrow = (s: number) => (s > 0.1 ? "▲" : s < -0.1 ? "▼" : "▬")
 
-const report = await runAgent({ instrument })
+const report = await runAgent({ instrument, riskPerTrade })
 
 if (asJson) {
   console.log(JSON.stringify(report, null, 2))
@@ -33,8 +35,15 @@ if (asJson) {
   console.log(`  ${new Date(r.generatedAt).toLocaleString()}`)
   console.log("  " + "─".repeat(58))
   console.log(`  Price ${r.price.toFixed(2)}   VWAP ${ind.vwap.toFixed(2)}   ATR ${ind.atr14.toFixed(2)}`)
+  console.log(`  Session ${r.session.label}${r.session.tradeable ? "" : "  [not live]"}`)
   console.log(`  Bias  ${r.direction.toUpperCase().padEnd(8)} ${bar(r.confidence)} ${r.confidence}%`)
   console.log(`  ~1σ move left in session: ${r.expectedMove.toFixed(2)} pts`)
+  const kl = r.keyLevels
+  console.log(
+    `  Levels  R: ${kl.nearestResistance ? `${kl.nearestResistance.label} ${kl.nearestResistance.price.toFixed(2)}` : "—"}` +
+      `   S: ${kl.nearestSupport ? `${kl.nearestSupport.label} ${kl.nearestSupport.price.toFixed(2)}` : "—"}` +
+      `   PDH/PDL ${kl.prevHigh.toFixed(2)}/${kl.prevLow.toFixed(2)}`,
+  )
   console.log("")
   console.log("  Signals")
   for (const s of r.signals) {
@@ -50,6 +59,11 @@ if (asJson) {
     console.log(`    Breakeven ${o.breakeven.toFixed(2)}   IV ${(o.iv * 100).toFixed(1)}%   ~${o.hoursToExpiry.toFixed(1)}h to expiry`)
     console.log(`    Entry ${c.underlyingEntry.toFixed(2)}  →  Target ${c.underlyingTarget.toFixed(2)}  |  Stop ${c.underlyingStop.toFixed(2)}  (R:R ${c.riskRewardRatio.toFixed(2)})`)
     console.log(`    Invalidation: ${c.invalidation.toFixed(2)}`)
+    const s = c.sizing
+    console.log(
+      `    Size: ${s.contracts}x @ ~$${s.targetPremium.toFixed(2)} target / ~$${s.stopPremium.toFixed(2)} stop` +
+        `  →  +$${Math.round(s.profitAtTarget)} / -$${Math.round(s.maxLoss)}  (risk $${s.riskPerTrade})`,
+    )
   } else {
     console.log("  ► NO HIGH-CONVICTION SETUP — stand aside / wait for confirmation.")
   }

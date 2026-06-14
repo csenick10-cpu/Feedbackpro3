@@ -1,17 +1,24 @@
 // The decision core: turn an indicator snapshot into a scored directional bias
 // and a concrete 0DTE strike recommendation with Black-Scholes greeks.
 
+import type { DailyLevels } from "./market-data.ts"
 import type {
   Direction,
   IndicatorSnapshot,
   Instrument,
+  KeyLevels,
   OptionMetrics,
   OptionType,
+  PositionSizing,
   Signal,
   StrikeRecommendation,
 } from "./types.ts"
 
 const RISK_FREE = 0.04
+/** Dollars per option point — both SPY and SPX(W) contracts are ×100. */
+const CONTRACT_MULTIPLIER = 100
+/** Default dollar risk budget (1R) per day trade. */
+export const DEFAULT_RISK_PER_TRADE = 500
 
 /** Strike increment listed for each instrument's 0DTE chain. */
 export function strikeIncrement(instrument: Instrument): number {
@@ -148,6 +155,62 @@ export function buildSignals(ind: IndicatorSnapshot): Signal[] {
   return signals
 }
 
+/** Assemble the day-trader level map and find the nearest S/R to price. */
+export function buildKeyLevels(ind: IndicatorSnapshot, daily: DailyLevels): KeyLevels {
+  const candidates: Array<{ label: string; price: number }> = [
+    { label: "Prev Close", price: daily.prevClose },
+    { label: "Prev High", price: daily.prevHigh },
+    { label: "Prev Low", price: daily.prevLow },
+    { label: "OR High", price: ind.openingRangeHigh },
+    { label: "OR Low", price: ind.openingRangeLow },
+    { label: "Session High", price: ind.sessionHigh },
+    { label: "Session Low", price: ind.sessionLow },
+    { label: "VWAP", price: ind.vwap },
+  ]
+  const above = candidates.filter((c) => c.price > ind.price + 1e-6).sort((a, b) => a.price - b.price)
+  const below = candidates.filter((c) => c.price < ind.price - 1e-6).sort((a, b) => b.price - a.price)
+  return {
+    prevClose: daily.prevClose,
+    prevHigh: daily.prevHigh,
+    prevLow: daily.prevLow,
+    openingRangeHigh: ind.openingRangeHigh,
+    openingRangeLow: ind.openingRangeLow,
+    sessionHigh: ind.sessionHigh,
+    sessionLow: ind.sessionLow,
+    nearestResistance: above[0] ?? null,
+    nearestSupport: below[0] ?? null,
+  }
+}
+
+/** Signal: is price breaking through, or stalling at, a prior-day key level? */
+export function keyLevelSignal(ind: IndicatorSnapshot, levels: KeyLevels): Signal {
+  const atr = Math.max(ind.atr14, ind.price * 0.0005)
+  const refs = [
+    { label: "prior high", price: levels.prevHigh, dir: 1 },
+    { label: "prior low", price: levels.prevLow, dir: -1 },
+    { label: "prior close", price: levels.prevClose, dir: 0 },
+  ]
+  let best = { score: 0, detail: "Mid-range between prior-day levels" }
+  for (const r of refs) {
+    const dist = (ind.price - r.price) / atr
+    if (Math.abs(dist) > 1.2) continue // not interacting with this level
+    if (r.dir === 1 && dist > 0) {
+      // Broken above prior high — bullish continuation.
+      const s = Math.min(1, dist)
+      if (s > Math.abs(best.score)) best = { score: s, detail: `Broke above ${r.label} (${r.price.toFixed(2)})` }
+    } else if (r.dir === -1 && dist < 0) {
+      const s = Math.max(-1, dist)
+      if (Math.abs(s) > Math.abs(best.score)) best = { score: s, detail: `Broke below ${r.label} (${r.price.toFixed(2)})` }
+    } else if (Math.abs(dist) < 0.25) {
+      // Pinned at a level — fade slightly toward mean reversion.
+      const s = -Math.sign(dist) * 0.3
+      if (Math.abs(s) > Math.abs(best.score))
+        best = { score: s, detail: `Testing ${r.label} (${r.price.toFixed(2)}) — reaction likely` }
+    }
+  }
+  return { name: "Key Level Break", weight: 0.12, score: best.score, detail: best.detail }
+}
+
 export interface BiasResult {
   direction: Direction
   confidence: number
@@ -189,11 +252,40 @@ export function hoursToClose(now = new Date()): number {
 
 // --- Strike recommendation ----------------------------------------------
 
+/**
+ * Estimate option premium after an underlying move using a 2nd-order Taylor
+ * expansion (delta + gamma). Good enough for quick intraday scalps; ignores
+ * theta over the holding window, so treat as an estimate.
+ */
+function premiumAfterMove(o: OptionMetrics, move: number): number {
+  return Math.max(0.01, o.premium + o.delta * move + 0.5 * o.gamma * move * move)
+}
+
+function buildSizing(
+  rec: Pick<StrikeRecommendation, "underlyingEntry" | "underlyingTarget" | "underlyingStop" | "option">,
+  riskPerTrade: number,
+): PositionSizing {
+  const o = rec.option
+  const targetPremium = premiumAfterMove(o, rec.underlyingTarget - rec.underlyingEntry)
+  const stopPremium = premiumAfterMove(o, rec.underlyingStop - rec.underlyingEntry)
+  const lossPerContract = Math.max(0.01, o.premium - stopPremium) * CONTRACT_MULTIPLIER
+  const contracts = Math.max(1, Math.floor(riskPerTrade / lossPerContract))
+  return {
+    riskPerTrade,
+    contracts,
+    targetPremium,
+    stopPremium,
+    maxLoss: contracts * lossPerContract,
+    profitAtTarget: contracts * Math.max(0, targetPremium - o.premium) * CONTRACT_MULTIPLIER,
+  }
+}
+
 export function recommendStrike(
   instrument: Instrument,
   ind: IndicatorSnapshot,
   bias: BiasResult,
   hoursLeft: number,
+  riskPerTrade: number = DEFAULT_RISK_PER_TRADE,
 ): StrikeRecommendation | null {
   if (bias.direction === "neutral") return null
 
@@ -232,7 +324,7 @@ export function recommendStrike(
 
   const option = blackScholes(optionType, spot, strike, iv, years)
 
-  return {
+  const base = {
     optionType,
     strike,
     moneyness,
@@ -243,4 +335,5 @@ export function recommendStrike(
     riskRewardRatio: risk > 0 ? reward / risk : 0,
     option,
   }
+  return { ...base, sizing: buildSizing(base, riskPerTrade) }
 }

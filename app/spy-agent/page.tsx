@@ -118,6 +118,14 @@ export default function SpyAgentPage() {
               <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
                 <span
                   className={`rounded-full px-2 py-0.5 font-semibold ${
+                    report.session.tradeable ? "bg-sky-500/15 text-sky-400" : "bg-zinc-500/20 text-zinc-400"
+                  }`}
+                  title={report.session.note}
+                >
+                  {report.session.label}
+                </span>
+                <span
+                  className={`rounded-full px-2 py-0.5 font-semibold ${
                     report.source === "live" ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"
                   }`}
                 >
@@ -176,6 +184,20 @@ export default function SpyAgentPage() {
                     {fmt(report.indicators.changeFromOpenPct)}% from open
                   </span>
                   <span>H {fmt(report.indicators.sessionHigh)}</span>
+                </div>
+                <div className="mt-3 space-y-1.5 border-t border-border pt-3 text-xs">
+                  <KeyLevel
+                    label="Resistance"
+                    level={report.keyLevels.nearestResistance}
+                    tone="text-red-400"
+                  />
+                  <KeyLevel label="Support" level={report.keyLevels.nearestSupport} tone="text-emerald-400" />
+                  <div className="flex items-center justify-between text-muted-foreground">
+                    <span>Prior day H / L</span>
+                    <span className="font-mono">
+                      {fmt(report.keyLevels.prevHigh)} / {fmt(report.keyLevels.prevLow)}
+                    </span>
+                  </div>
                 </div>
               </section>
 
@@ -265,6 +287,21 @@ function Recommendation({ report, accent }: { report: AgentReport; accent: (type
         <Level label="Target" value={fmt(r.underlyingTarget)} tone="bull" />
         <Level label="Stop" value={fmt(r.underlyingStop)} tone="bear" />
       </div>
+
+      {/* Day-trade position sizing & premium-based exits */}
+      <div className="mt-4 rounded-lg border border-border bg-background/40 p-3">
+        <div className="mb-2 flex items-center justify-between text-xs">
+          <span className="font-semibold uppercase tracking-wide text-muted-foreground">Position Plan</span>
+          <span className="text-muted-foreground">${r.sizing.riskPerTrade} risk · {r.sizing.contracts}x</span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Metric label="Tgt Premium" value={`$${fmt(r.sizing.targetPremium)}`} />
+          <Metric label="Stop Premium" value={`$${fmt(r.sizing.stopPremium)}`} />
+          <Metric label="Profit @ Tgt" value={`+$${Math.round(r.sizing.profitAtTarget)}`} highlight />
+          <Metric label="Loss @ Stop" value={`-$${Math.round(r.sizing.maxLoss)}`} />
+        </div>
+      </div>
+
       <p className="mt-3 text-xs text-muted-foreground">
         Thesis invalidated at <span className="font-semibold text-foreground">{fmt(r.invalidation)}</span> (loss of the
         VWAP / EMA21 pivot).
@@ -358,6 +395,25 @@ function Level({ label, value, tone }: { label: string; value: string; tone: "bu
     <div className="rounded-lg border border-border px-3 py-2 text-center">
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className={`mt-0.5 font-mono text-base font-bold ${c}`}>{value}</div>
+    </div>
+  )
+}
+
+function KeyLevel({
+  label,
+  level,
+  tone,
+}: {
+  label: string
+  level: { label: string; price: number } | null
+  tone: string
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className={tone}>{label}</span>
+      <span className="font-mono text-foreground/90">
+        {level ? `${level.label} · ${fmt(level.price)}` : "—"}
+      </span>
     </div>
   )
 }
