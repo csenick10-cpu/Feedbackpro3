@@ -1,0 +1,102 @@
+//@version=6
+indicator("Asia Session High / Low (Previous Day)", shorttitle="Asia HL", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Marks the HIGH and LOW of the PREVIOUS day's Asia session.
+// Once an Asia session finishes, its high and low are drawn forward as
+// horizontal levels until the next Asia session completes and replaces them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Inputs ──────────────────────────────────────────────────────────────────
+grpS      = "Session"
+sessTime  = input.session("0000-0800", "Asia session time",        group = grpS, tooltip = "Session window in HHmm-HHmm, evaluated in the timezone below.")
+sessTz    = input.string ("Asia/Tokyo", "Session timezone",         group = grpS, options = ["Asia/Tokyo", "Asia/Shanghai", "Asia/Singapore", "Asia/Hong_Kong", "Asia/Kolkata", "GMT", "GMT+9", "GMT+8", "GMT+0"])
+
+grpV      = "Display"
+showHi    = input.bool  (true,  "Show high level",  group = grpV, inline = "hi")
+hiColor   = input.color (color.new(color.red, 0),   "", group = grpV, inline = "hi")
+showLo    = input.bool  (true,  "Show low level",   group = grpV, inline = "lo")
+loColor   = input.color (color.new(color.green, 0), "", group = grpV, inline = "lo")
+lineWidth = input.int   (2, "Line width", minval = 1, maxval = 5, group = grpV)
+lineStyle = input.string("Solid", "Line style", options = ["Solid", "Dashed", "Dotted"], group = grpV)
+showLbls  = input.bool  (true, "Show labels",  group = grpV)
+extendR   = input.bool  (true, "Extend levels to the right (until next session)", group = grpV)
+showBox   = input.bool  (false, "Shade Asia session background", group = grpV)
+boxColor  = input.color (color.new(color.blue, 90), "Shade color", group = grpV)
+
+styleOf(s) => s == "Dashed" ? line.style_dashed : s == "Dotted" ? line.style_dotted : line.style_solid
+
+// ── Session state ─────────────────────────────────────────────────────────────
+// inSession is true on bars that fall inside the Asia session window.
+inSession = not na(time(timeframe.period, sessTime, sessTz))
+started   = inSession and not inSession[1]   // first bar of the session
+ended     = not inSession and inSession[1]   // first bar AFTER the session closed
+
+// Running high/low of the session currently in progress.
+var float curHi   = na
+var float curLo   = na
+var int   curHiT  = na
+var int   curLoT  = na
+var int   sessBeg = na
+
+if started
+    curHi   := high
+    curLo   := low
+    curHiT  := time
+    curLoT  := time
+    sessBeg := time
+else if inSession
+    if high > curHi
+        curHi  := high
+        curHiT := time
+    if low < curLo
+        curLo  := low
+        curLoT := time
+
+// ── Persisted "previous session" high/low + drawings ──────────────────────────
+var float prevHi  = na
+var float prevLo  = na
+var line  hiLine  = na
+var line  loLine  = na
+var label hiLabel = na
+var label loLabel = na
+var box   sessBox = na
+
+// When a session just ended, promote its high/low to "previous session" values
+// and (re)draw the levels.
+if ended
+    prevHi := curHi
+    prevLo := curLo
+
+    // Clear old drawings.
+    line.delete(hiLine)
+    line.delete(loLine)
+    label.delete(hiLabel)
+    label.delete(loLabel)
+
+    rightT = time  // extend from the moment the session closed
+
+    if showHi
+        hiLine := line.new(curHiT, prevHi, rightT, prevHi, xloc = xloc.bar_time, color = hiColor, width = lineWidth, style = styleOf(lineStyle))
+        if showLbls
+            hiLabel := label.new(rightT, prevHi, "Asia High " + str.tostring(prevHi, format.mintick), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(hiColor, 80), textcolor = hiColor, size = size.small)
+
+    if showLo
+        loLine := line.new(curLoT, prevLo, rightT, prevLo, xloc = xloc.bar_time, color = loColor, width = lineWidth, style = styleOf(lineStyle))
+        if showLbls
+            loLabel := label.new(rightT, prevLo, "Asia Low " + str.tostring(prevLo, format.mintick), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(loColor, 80), textcolor = loColor, size = size.small)
+
+// Keep the levels stretching to the latest bar while no new session has closed.
+if extendR and barstate.islast
+    if not na(hiLine)
+        line.set_x2(hiLine, time)
+        if not na(hiLabel)
+            label.set_x(hiLabel, time)
+    if not na(loLine)
+        line.set_x2(loLine, time)
+        if not na(loLabel)
+            label.set_x(loLabel, time)
+
+// ── Optional session background shading ───────────────────────────────────────
+if showBox and ended and not na(sessBeg)
+    sessBox := box.new(sessBeg, curHi, time, curLo, xloc = xloc.bar_time, border_color = color.new(boxColor, 60), bgcolor = boxColor)
